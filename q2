@@ -104,7 +104,7 @@ while true; do
   sleep 2
 done
 
-echo "$EXTERNAL_IP localhost.org" | sudo tee -a /etc/hosts
+echo "$EXTERNAL_IP example.org" | sudo tee -a /etc/hosts
 echo "Exam Environment setup..."
 sleep 10
 echo "done"
