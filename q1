@@ -1,0 +1,60 @@
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autoscale
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apache-server
+  namespace: autoscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apache-server
+  template:
+    metadata:
+      labels:
+        app: apache-server
+    spec:
+      containers:
+      - name: apache
+        image: httpd:2.4
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "100m"
+          limits:
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apache-server
+  namespace: autoscale
+spec:
+  selector:
+    app: apache-server
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+EOF
+
+# Install Metrics Server (required for HPA)
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+# Fix TLS issue (common in labs / KodeKloud)
+kubectl patch deployment metrics-server \
+  -n kube-system \
+  --type='json' \
+  -p='[
+    {
+      "op": "add",
+      "path": "/spec/template/spec/containers/0/args/-",
+      "value": "--kubelet-insecure-tls"
+    }
+  ]'
