@@ -1,0 +1,180 @@
+#!/bin/bash
+
+set -e
+
+echo "========================================="
+echo "Preparing Question-4 Exam Environment"
+echo "========================================="
+
+# =========================================
+# 1. Create Namespace
+# =========================================
+kubectl create namespace relative-fawn || true
+
+# =========================================
+# 2. Deploy MySQL
+# =========================================
+kubectl apply -n relative-fawn -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: rootpass
+        - name: MYSQL_DATABASE
+          value: wordpress
+        ports:
+        - containerPort: 3306
+        resources:
+          requests:
+            memory: "600Mi"
+            cpu: "400m"
+          limits:
+            memory: "600Mi"
+            cpu: "400m"
+EOF
+
+# =========================================
+# 3. Create MySQL Service
+# =========================================
+kubectl apply -n relative-fawn -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  selector:
+    app: mysql
+  ports:
+  - port: 3306
+EOF
+
+# =========================================
+# 4. Create WordPress Deployment
+# =========================================
+kubectl apply -n relative-fawn -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+
+      initContainers:
+      - name: init-permissions
+        image: busybox
+        command: ["sh", "-c", "sleep 5"]
+        resources:
+          requests:
+            memory: "600Mi"
+            cpu: "400m"
+          limits:
+            memory: "600Mi"
+            cpu: "400m"
+
+      containers:
+      - name: wordpress
+        image: wordpress:6.5-apache
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: mysql
+        - name: WORDPRESS_DB_USER
+          value: root
+        - name: WORDPRESS_DB_PASSWORD
+          value: rootpass
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "600Mi"
+            cpu: "400m"
+          limits:
+            memory: "600Mi"
+            cpu: "400m"
+
+      - name: metrics-sidecar
+        image: busybox
+        command:
+        - sh
+        - -c
+        - |
+          while true; do
+            echo "metrics running"
+            sleep 30
+          done
+        resources:
+          requests:
+            memory: "600Mi"
+            cpu: "400m"
+          limits:
+            memory: "600Mi"
+            cpu: "400m"
+EOF
+
+# =========================================
+# 5. Install Metrics Server
+# =========================================
+
+# Install Metrics Server (required for HPA)
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+# Fix TLS issue (common in labs / KodeKloud)
+kubectl patch deployment metrics-server \
+  -n kube-system \
+  --type='json' \
+  -p='[
+    {
+      "op": "add",
+      "path": "/spec/template/spec/containers/0/args/-",
+      "value": "--kubelet-insecure-tls"
+    }
+  ]'
+
+# =========================================
+# 6. Optional Background Workload
+# =========================================
+kubectl run background-load \
+--image=busybox \
+-n relative-fawn \
+-- sh -c "sleep 36000" || true
+
+# =========================================
+# 7. Wait For Pods
+# =========================================
+echo ""
+echo "Waiting for workloads..."
+
+kubectl rollout status deployment/mysql -n relative-fawn
+kubectl rollout status deployment/wordpress -n relative-fawn
+
+echo ""
+echo "========================================="
+echo "Environment Ready"
+echo "========================================="
+
+kubectl get pods -n relative-fawn
+
+echo ""
+echo "Question environment prepared successfully."
