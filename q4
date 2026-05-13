@@ -12,7 +12,21 @@ echo "========================================="
 kubectl create namespace relative-fawn || true
 
 # =========================================
-# 2. Deploy MySQL
+# 2. Create ResourceQuota
+# =========================================
+kubectl apply -n relative-fawn -f - <<EOF
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: wordpress-quota
+spec:
+  hard:
+    requests.cpu: "1000m"
+    requests.memory: 1500Mi
+EOF
+
+# =========================================
+# 3. Deploy MySQL
 # =========================================
 kubectl apply -n relative-fawn -f - <<EOF
 apiVersion: apps/v1
@@ -41,15 +55,15 @@ spec:
         - containerPort: 3306
         resources:
           requests:
-            memory: "600Mi"
-            cpu: "400m"
+            cpu: "100m"
+            memory: "128Mi"
           limits:
-            memory: "600Mi"
-            cpu: "400m"
+            cpu: "200m"
+            memory: "256Mi"
 EOF
 
 # =========================================
-# 3. Create MySQL Service
+# 4. Create MySQL Service
 # =========================================
 kubectl apply -n relative-fawn -f - <<EOF
 apiVersion: v1
@@ -64,7 +78,7 @@ spec:
 EOF
 
 # =========================================
-# 4. Create WordPress Deployment
+# 5. Create WordPress Deployment
 # =========================================
 kubectl apply -n relative-fawn -f - <<EOF
 apiVersion: apps/v1
@@ -113,34 +127,15 @@ spec:
           limits:
             memory: "600Mi"
             cpu: "400m"
-
-      - name: metrics-sidecar
-        image: busybox
-        command:
-        - sh
-        - -c
-        - |
-          while true; do
-            echo "metrics running"
-            sleep 30
-          done
-        resources:
-          requests:
-            memory: "600Mi"
-            cpu: "400m"
-          limits:
-            memory: "600Mi"
-            cpu: "400m"
 EOF
 
 # =========================================
-# 5. Install Metrics Server
+# 6. Install Metrics Server
 # =========================================
 
-# Install Metrics Server (required for HPA)
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl apply -f \
+https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 
-# Fix TLS issue (common in labs / KodeKloud)
 kubectl patch deployment metrics-server \
   -n kube-system \
   --type='json' \
@@ -153,21 +148,12 @@ kubectl patch deployment metrics-server \
   ]'
 
 # =========================================
-# 6. Optional Background Workload
-# =========================================
-kubectl run background-load \
---image=busybox \
--n relative-fawn \
--- sh -c "sleep 36000" || true
-
-# =========================================
-# 7. Wait For Pods
+# 7. Wait For Deployments
 # =========================================
 echo ""
-echo "Waiting for workloads..."
+echo "Waiting for MySQL deployment..."
 
-kubectl rollout status deployment/mysql -n relative-fawn
-kubectl rollout status deployment/wordpress -n relative-fawn
+kubectl rollout status deployment/mysql -n relative-fawn --timeout=180s || true
 
 echo ""
 echo "========================================="
@@ -177,4 +163,9 @@ echo "========================================="
 kubectl get pods -n relative-fawn
 
 echo ""
-echo "Question environment prepared successfully."
+echo "Expected Result:"
+echo "- MySQL pod should be Running"
+echo "- Some WordPress pods should remain Pending"
+echo ""
+echo "Candidate must reduce WordPress requests"
+echo "to allow all 3 replicas to run."
