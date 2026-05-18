@@ -1,0 +1,29 @@
+#!/bin/bash
+
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synergy-leverager
+  namespace: default
+  labels:
+    app: myapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+        - name: myapp
+          image: ubuntu:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - "mkdir -p /var/log && while true; do echo \"\$(date) App is running smoothly\" >> /var/log/synergy-leverager.log; sleep 1; done"
+EOF
