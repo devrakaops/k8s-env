@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# 1. Create namespace
+kubectl create namespace spline-reticulator
+
+# 2. deployment pre-existed
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front-end
+  namespace: spline-reticulator
+  labels:
+    app: front-end
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: front-end
+  template:
+    metadata:
+      labels:
+        app: front-end
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          # no port specification present for now
+EOF
