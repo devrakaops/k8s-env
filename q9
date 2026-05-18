@@ -1,0 +1,144 @@
+#!/bin/bash
+
+set -e
+
+echo "========================================="
+echo "Creating CKA PriorityClass Practice Lab"
+echo "========================================="
+
+NAMESPACE="priority"
+
+echo "[1/7] Creating namespace..."
+
+kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+echo "[2/7] Creating existing PriorityClass..."
+
+cat <<EOF | kubectl apply -f -
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: medium-priority
+value: 100000
+globalDefault: false
+description: "Medium priority workloads"
+EOF
+
+echo "[3/7] Creating low priority deployment low-app-1..."
+
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: low-app-1
+  namespace: $NAMESPACE
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: low-app-1
+  template:
+    metadata:
+      labels:
+        app: low-app-1
+    spec:
+      containers:
+      - name: stress
+        image: busybox
+        command: ["sh", "-c", "sleep 3600"]
+        resources:
+          requests:
+            memory: "600Mi"
+            cpu: "300m"
+EOF
+
+echo "[4/7] Creating low priority deployment low-app-2..."
+
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: low-app-2
+  namespace: $NAMESPACE
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: low-app-2
+  template:
+    metadata:
+      labels:
+        app: low-app-2
+    spec:
+      containers:
+      - name: stress
+        image: busybox
+        command: ["sh", "-c", "sleep 3600"]
+        resources:
+          requests:
+            memory: "600Mi"
+            cpu: "300m"
+EOF
+
+echo "[5/7] Creating app-logger deployment..."
+
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-logger
+  namespace: $NAMESPACE
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: app-logger
+  template:
+    metadata:
+      labels:
+        app: app-logger
+    spec:
+      containers:
+      - name: logger
+        image: busybox
+        command: ["sh", "-c", "while true; do echo app-running; sleep 10; done"]
+        resources:
+          requests:
+            memory: "500Mi"
+            cpu: "300m"
+EOF
+
+echo "[6/7] Creating busybox-logger deployment WITHOUT priority class..."
+
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: busybox-logger
+  namespace: $NAMESPACE
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: busybox-logger
+  template:
+    metadata:
+      labels:
+        app: busybox-logger
+    spec:
+      containers:
+      - name: busybox
+        image: busybox
+        command: ["sh", "-c", "while true; do echo hello; sleep 5; done"]
+        resources:
+          requests:
+            memory: "900Mi"
+            cpu: "400m"
+EOF
+
+sleep 10
+
+echo ""
+echo "========================================="
+echo "Lab Setup Complete"
+echo "========================================="
