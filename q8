@@ -27,3 +27,7 @@ spec:
           image: nginx:alpine
           # no port specification present for now
 EOF
+echo ""
+echo "========================================="
+echo "Environment Ready"
+echo "========================================="
