@@ -157,15 +157,9 @@ kubectl rollout status deployment/mysql -n relative-fawn --timeout=180s || true
 
 echo ""
 echo "========================================="
-echo "Environment Ready"
+echo "Environment Ready in next 20 sec"
 echo "========================================="
 
 kubectl get pods -n relative-fawn
-
-echo ""
-echo "Expected Result:"
-echo "- MySQL pod should be Running"
-echo "- Some WordPress pods should remain Pending"
-echo ""
-echo "Candidate must reduce WordPress requests"
-echo "to allow all 3 replicas to run."
+echo "wait for 15 seconds"
+sleep 15
