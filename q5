@@ -27,3 +27,8 @@ spec:
             - -c
             - "mkdir -p /var/log && while true; do echo \"\$(date) App is running smoothly\" >> /var/log/synergy-leverager.log; sleep 1; done"
 EOF
+
+echo ""
+echo "========================================="
+echo "Environment Ready"
+echo "========================================="
