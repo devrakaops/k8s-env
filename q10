@@ -14,7 +14,7 @@ echo -e "${BLUE}=== STEP 2: Creating the 'mariadb' Namespace ===${NC}"
 kubectl create namespace mariadb
 
 echo -e "${BLUE}=== STEP 3: Creating the single existing PersistentVolume ===${NC}"
-# Creating a PV with storageClassName: local-path
+# Pre-creating the PV that the PVC will bind to
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolume
@@ -31,10 +31,23 @@ spec:
     path: "/mnt/data-mariadb"
 EOF
 
-echo -e "${BLUE}=== STEP 4: Creating the deployment manifest file at ~/mariadb-deployment.yaml ===${NC}"
-# This manifest creates a basic MariaDB deployment WITHOUT any volume mounts configuration.
-# You will need to edit this file to solve the task.
+echo -e "${BLUE}=== STEP 4: Creating combined PVC and Deployment manifest ===${NC}"
+# This writes both the complete PVC and the incomplete Deployment into a single file.
+# The candidate only needs to fill in the PVC name under the volumes block.
 cat << 'EOF' > ~/mariadb-deployment.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb
+  namespace: mariadb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 250Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,9 +74,19 @@ spec:
           ports:
             - containerPort: 3306
               name: mysql
+          volumeMounts:
+            - name: mariadb-storage
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mariadb-storage
+          persistentVolumeClaim:
+            claimName:  # <--- CANDIDATE NEEDS TO FILL THIS IN WITH: mariadb
 EOF
 
-echo -e "${GREEN}=== Lab environment setup complete! ===${NC}"
-echo -e "${GREEN}1. The 'mariadb-pv' has been created in the cluster.${NC}"
-echo -e "${GREEN}2. The template file is ready at: ~/mariadb-deployment.yaml${NC}"
-echo -e "${GREEN}3. Run 'kubectl get pv' to verify the storage status.${NC}"
+
+
+echo "---------------------------------------------------------------------------"
+echo " "
+echo "--------------------- Exam Environment Ready for Q10-----------------------"
+echo ""
+echo "----------------------------------------------------------------------------"
