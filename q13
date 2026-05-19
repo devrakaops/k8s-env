@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# ANSI Color Codes for terminal output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}=== STEP 1: Cleaning up any old resources ===${NC}"
+kubectl delete ns frontend backend --ignore-not-found=true
+rm -rf ~/netpol
+
+echo -e "${BLUE}=== STEP 2: Creating Namespaces ===${NC}"
+kubectl create namespace frontend
+kubectl create namespace backend
+
+# FIXED: We use custom labels ('purpose') instead of trying to modify reserved system metadata labels.
+kubectl label namespace frontend purpose=frontend --overwrite
+kubectl label namespace backend purpose=backend --overwrite
+
+echo -e "${BLUE}=== STEP 3: Creating Frontend & Backend Deployments ===${NC}"
+# FIXED: Explicitly naming the deployments 'backend' and 'frontend' to match clean metadata standards.
+kubectl create deployment backend -n backend --image=registry.k8s.io/echoserver:1.10 --port=8080
+kubectl expose deployment backend -n backend --port=80 --target-port=8080
+
+kubectl create deployment frontend -n frontend --image=nginx:alpine --port=80
+kubectl expose deployment frontend -n frontend --port=80
+
+echo "⏳ Waiting for deployments to scale up and become ready..."
+kubectl rollout status deployment/backend -n backend --timeout=60s
+kubectl rollout status deployment/frontend -n frontend --timeout=60s
+
+echo -e "${BLUE}=== STEP 4: Creating ~/netpol Sample Directory ===${NC}"
+mkdir -p ~/netpol
+
+# --- NETPOL 1: WRONG (Targets a non-existent deployment label) ---
+cat <<EOF > ~/netpol/netpol1.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-frontend-isolated
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: wrong-label-match
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          purpose: frontend
+EOF
+
+# --- NETPOL 2: CORRECT (Accurate pod match, target port match, and specific namespace constraint) ---
+cat <<EOF > ~/netpol/netpol2.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-frontend-secure
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          purpose: frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+EOF
+
+# --- NETPOL 3: WRONG (Overly permissive - allows all cluster traffic to bypass namespace rules) ---
+cat <<EOF > ~/netpol/netpol3.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-all-ingress
+  namespace: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  ingress:
+  - {}
+EOF
+
+echo "----------------------------------------------------------------"
+echo ""
+echo "--------------------Exam Environment Ready ---------------------"
+echo " "
+echo "----------------------------------------------------------------"
