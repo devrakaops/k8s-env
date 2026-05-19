@@ -1,0 +1,166 @@
+#!/bin/bash
+
+# Terminal Formatting के लिए रंगों के कोड
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}=== STEP 1: पुराने सेटअप की सफाई ===${NC}"
+kubectl delete ingress web -n default --ignore-not-found=true
+kubectl delete service web-service -n default --ignore-not-found=true
+kubectl delete deployment web-app -n default --ignore-not-found=true
+kubectl delete secret web-tls-secret -n default --ignore-not-found=true
+
+# ==========================================
+# 2. Install Gateway API CRDs (सबसे जरूरी)
+# ==========================================
+echo -e "${BLUE}=== STEP 2: Gateway API CRDs इंस्टॉल करना ===${NC}"
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+
+# ==========================================
+# 3. Install MetalLB (आपकी स्क्रिप्ट के अनुसार)
+# ==========================================
+echo -e "${BLUE}=== STEP 3: MetalLB इंस्टॉल करना ===${NC}"
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
+
+echo "⏳ Waiting for MetalLB pods to be ready..."
+kubectl wait -n metallb-system --for=condition=ready pod --all --timeout=180s
+
+NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+BASE_IP=$(echo $NODE_IP | awk -F. '{print $1"."$2"."$3}')
+START_IP="${BASE_IP}.200"
+END_IP="${BASE_IP}.210"
+
+echo "Using IP Range: ${START_IP}-${END_IP}"
+
+cat <<EOF | kubectl apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: my-ip-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - ${START_IP}-${END_IP}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: my-l2adv
+  namespace: metallb-system
+spec: {}
+EOF
+
+# ==========================================
+# 4. Install NGINX Ingress Controller
+# ==========================================
+echo -e "${BLUE}=== STEP 4: NGINX Ingress Controller इंस्टॉल करना ===${NC}"
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+
+echo "⏳ Waiting for ingress controller..."
+kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=300s
+
+# ==========================================
+# 5. Create TLS Secret (Dummy SSL Certificate)
+# ==========================================
+echo -e "${BLUE}=== STEP 5: डमी TLS/SSL सर्टिफिकेट जनरेट करना ===${NC}"
+# यह आपके सवाल की TLS शर्त को पूरा करने के लिए एक फर्जी की (Key) और सर्टिफिकेट बनाएगा
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /tmp/tls.key -out /tmp/tls.crt \
+  -subj "/CN=gateway.web.k8s.local/O=WebGateway"
+
+kubectl create secret tls web-tls-secret \
+  --key=/tmp/tls.key \
+  --cert=/tmp/tls.crt \
+  -n default
+
+# ==========================================
+# 6. Create Backend Deployment and Service
+# ==========================================
+echo -e "${BLUE}=== STEP 6: बैकएंड वेब ऐप और सर्विस बनाना ===${NC}"
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: echo
+        image: registry.k8s.io/echoserver:1.10
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+  namespace: default
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+EOF
+
+# ==========================================
+# 7. Create Existing Ingress Resource (जिससे माइग्रेट करना है)
+# ==========================================
+echo -e "${BLUE}=== STEP 7: पुराने 'web' Ingress को नियमों के साथ बनाना ===${NC}"
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - gateway.web.k8s.local
+    secretName: web-tls-secret
+  rules:
+  - host: gateway.web.k8s.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-service
+            port:
+              number: 80
+EOF
+
+# ==========================================
+# 8. Host Entry and External IP Sync
+# ==========================================
+
+while true; do
+  EXTERNAL_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  if [ -n "$EXTERNAL_IP" ]; then
+    break
+  fi
+  sleep 2
+done
+
+if command -v sudo >/dev/null 2>&1; then
+  echo "$EXTERNAL_IP gateway.web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
+fi
+echo "----------------------------------------------------------------"
+echo ""
+echo "--------------------Exam Environment Ready ---------------------"
+echo " "
+echo "----------------------------------------------------------------"
