@@ -1,35 +1,35 @@
 #!/bin/bash
 
-# ANSI Color Codes for terminal formatting
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# ==========================================
+# 1. Install MetalLB
+# ==========================================
+kubectl apply -f \
+https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
 
-echo -e "${BLUE}=== STEP 1: Cleaning up legacy resources ===${NC}"
-kubectl delete ns nginx-static --ignore-not-found=true
+echo "⏳ Waiting for MetalLB pods..."
 
-echo -e "${BLUE}=== STEP 2: Creating Namespace ===${NC}"
-kubectl create namespace nginx-static
+kubectl wait -n metallb-system \
+  --for=condition=ready pod \
+  --all \
+  --timeout=180s
 
-echo -e "${BLUE}=== STEP 3: Installing MetalLB LoadBalancer Provider ===${NC}"
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
-
-echo "⏳ Waiting for MetalLB components to come online..."
-kubectl wait -n metallb-system --for=condition=ready pod --all --timeout=180s
-
-# Dynamically extract internal node IP subnets to build a local L2 pool range
+# ==========================================
+# 2. Configure MetalLB IP Pool
+# ==========================================
 NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+
 BASE_IP=$(echo $NODE_IP | awk -F. '{print $1"."$2"."$3}')
+
 START_IP="${BASE_IP}.220"
 END_IP="${BASE_IP}.230"
 
-echo "Allocating LoadBalancer IP Range: ${START_IP} - ${END_IP}"
+echo "Using IP Range: ${START_IP}-${END_IP}"
 
 cat <<EOF | kubectl apply -f -
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
 metadata:
-  name: nginx-static-pool
+  name: my-ip-pool
   namespace: metallb-system
 spec:
   addresses:
@@ -38,12 +38,16 @@ spec:
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
 metadata:
-  name: nginx-static-l2adv
+  name: my-l2adv
   namespace: metallb-system
 spec: {}
 EOF
 
-echo -e "${BLUE}=== STEP 4: Generating SSL Certificates ===${NC}"
+# ==========================================
+# 3. Create Namespace & SSL Secrets
+# ==========================================
+kubectl create namespace nginx-static --dry-run=client -o yaml | kubectl apply -f -
+
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout /tmp/nginx.key -out /tmp/nginx.crt \
   -subj "/CN=web.k8s.local"
@@ -51,9 +55,12 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 kubectl create secret tls nginx-tls-secret \
   -n nginx-static \
   --key=/tmp/nginx.key \
-  --cert=/tmp/nginx.crt
+  --cert=/tmp/nginx.crt \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-echo -e "${BLUE}=== STEP 5: Creating ConfigMap (Allowing TLSv1.2 & TLSv1.3) ===${NC}"
+# ==========================================
+# 4. Create ConfigMap (TLSv1.2 & TLSv1.3 enabled)
+# ==========================================
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -81,7 +88,9 @@ data:
     }
 EOF
 
-echo -e "${BLUE}=== STEP 6: Creating NGINX Deployment and LoadBalancer Service ===${NC}"
+# ==========================================
+# 5. Create NGINX Deployment and LoadBalancer Service
+# ==========================================
 cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
@@ -131,23 +140,35 @@ spec:
     app: nginx-static
 EOF
 
-echo "⏳ Waiting for NGINX deployment pods to roll out..."
-kubectl rollout status deployment/nginx-static -n nginx-static --timeout=60s
+echo "⏳ Waiting for NGINX deployment..."
 
-echo "⏳ Fetching assigned External IP from MetalLB..."
+kubectl rollout status deployment/nginx-static \
+-n nginx-static \
+--timeout=60s
+
+# ==========================================
+# 6. Wait For External IP
+# ==========================================
 while true; do
-  EXTERNAL_IP=$(kubectl get svc nginx-static-svc -n nginx-static -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  EXTERNAL_IP=$(kubectl get svc nginx-static-svc \
+  -n nginx-static \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+
   if [ -n "$EXTERNAL_IP" ]; then
     break
   fi
+
   sleep 2
 done
 
-# Safe domain mapping updates inside your host translation mapping rules
-sudo sed -i '/web.k8s.local/d' /etc/hosts
-echo "$EXTERNAL_IP web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
+# ==========================================
+# 7. Optional /etc/hosts Entry
+# ==========================================
+if command -v sudo >/dev/null 2>&1; then
+  sudo sed -i '/web.k8s.local/d' /etc/hosts
+  echo "$EXTERNAL_IP web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
+fi
 
 echo ""
-echo -e "${GREEN}✅ Lab Environment Ready with MetalLB External IP!${NC}"
-echo -e "Assigned IP Address: ${BLUE}$EXTERNAL_IP${NC}"
-echo -e "Initial state verification check: ${BLUE}curl -k https://web.k8s.local${NC}"
+echo "✅ Environment Ready with MetalLB LoadBalancer IP: $EXTERNAL_IP"
+echo "Initial Verification: curl -k https://web.k8s.local"
