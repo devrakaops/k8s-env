@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# ANSI Color Codes for terminal formatting
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}=== STEP 1: Cleaning up legacy resources ===${NC}"
+kubectl delete ns nginx-static --ignore-not-found=true
+
+echo -e "${BLUE}=== STEP 2: Creating Namespace ===${NC}"
+kubectl create namespace nginx-static
+
+echo -e "${BLUE}=== STEP 3: Generating Dummy SSL Certificates ===${NC}"
+# Generates a self-signed certificate pair required for NGINX HTTPS server
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /tmp/nginx.key -out /tmp/nginx.crt \
+  -subj "/CN=web.k8s.local"
+
+# Save the generated certificates securely inside the namespace as a TLS Secret
+kubectl create secret tls nginx-tls-secret \
+  -n nginx-static \
+  --key=/tmp/nginx.key \
+  --cert=/tmp/nginx.crt
+
+echo -e "${BLUE}=== STEP 4: Creating ConfigMap (Initial state allowing TLSv1.2 & TLSv1.3) ===${NC}"
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: nginx-static
+data:
+  nginx.conf: |
+    events {}
+    http {
+        server {
+            listen 443 ssl;
+            server_name web.k8s.local;
+
+            ssl_certificate /etc/nginx/ssl/tls.crt;
+            ssl_certificate_key /etc/nginx/ssl/tls.key;
+            
+            # Initial state allowing multiple protocols (to be modified during exam)
+            ssl_protocols TLSv1.2 TLSv1.3;
+
+            location / {
+                return 200 'Welcome to NGINX Secure Static Server!';
+                add_header Content-Type text/plain;
+            }
+        }
+    }
+EOF
+
+echo -e "${BLUE}=== STEP 5: Creating NGINX Deployment and Service ===${NC}"
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-static
+  namespace: nginx-static
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-static
+  template:
+    metadata:
+      labels:
+        app: nginx-static
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 443
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/nginx
+        - name: ssl-volume
+          mountPath: /etc/nginx/ssl
+      volumes:
+      - name: config-volume
+        configMap:
+          name: nginx-config
+      - name: ssl-volume
+        secret:
+          secretName: nginx-tls-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-static-svc
+  namespace: nginx-static
+spec:
+  ports:
+  - port: 443
+    targetPort: 443
+    nodePort: 30443
+  type: NodePort
+  selector:
+    app: nginx-static
+EOF
+
+echo "⏳ Waiting for NGINX deployment to become ready..."
+kubectl rollout status deployment/nginx-static -n nginx-static --timeout=60s
+
+# Map node IP locally to route domain matching rules for testing
+NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+sudo sed -i '/web.k8s.local/d' /etc/hosts
+echo "$NODE_IP web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
+
+echo ""
+echo -e "${GREEN}✅ Lab Environment Ready!${NC}"
+echo -e "Initial state verification check: ${BLUE}curl -k https://web.k8s.local${NC}"
+
+echo ""
+echo -e "${GREEN}✅ Lab environment is ready!${NC}"
+echo "You can now solve the task using the commands below."
