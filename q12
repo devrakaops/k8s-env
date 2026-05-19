@@ -1,31 +1,32 @@
 #!/bin/bash
 
-# Terminal Formatting के लिए रंगों के कोड
+# ANSI Color Codes for terminal formatting
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}=== STEP 1: पुराने सेटअप की सफाई ===${NC}"
+echo -e "${BLUE}=== STEP 1: Cleaning up legacy resources ===${NC}"
 kubectl delete ingress web -n default --ignore-not-found=true
 kubectl delete service web-service -n default --ignore-not-found=true
 kubectl delete deployment web-app -n default --ignore-not-found=true
 kubectl delete secret web-tls-secret -n default --ignore-not-found=true
 
 # ==========================================
-# 2. Install Gateway API CRDs (सबसे जरूरी)
+# 2. Install Gateway API CRDs (Prerequisite)
 # ==========================================
-echo -e "${BLUE}=== STEP 2: Gateway API CRDs इंस्टॉल करना ===${NC}"
+echo -e "${BLUE}=== STEP 2: Installing Gateway API CRDs ===${NC}"
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
 
 # ==========================================
-# 3. Install MetalLB (आपकी स्क्रिप्ट के अनुसार)
+# 3. Install MetalLB LoadBalancer Provider
 # ==========================================
-echo -e "${BLUE}=== STEP 3: MetalLB इंस्टॉल करना ===${NC}"
+echo -e "${BLUE}=== STEP 3: Installing MetalLB ===${NC}"
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
 
 echo "⏳ Waiting for MetalLB pods to be ready..."
 kubectl wait -n metallb-system --for=condition=ready pod --all --timeout=180s
 
+# Dynamically extract internal node IP subnets to build the L2 pool range
 NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 BASE_IP=$(echo $NODE_IP | awk -F. '{print $1"."$2"."$3}')
 START_IP="${BASE_IP}.200"
@@ -54,7 +55,7 @@ EOF
 # ==========================================
 # 4. Install NGINX Ingress Controller
 # ==========================================
-echo -e "${BLUE}=== STEP 4: NGINX Ingress Controller इंस्टॉल करना ===${NC}"
+echo -e "${BLUE}=== STEP 4: Installing NGINX Ingress Controller ===${NC}"
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
 
 echo "⏳ Waiting for ingress controller..."
@@ -63,8 +64,8 @@ kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --ti
 # ==========================================
 # 5. Create TLS Secret (Dummy SSL Certificate)
 # ==========================================
-echo -e "${BLUE}=== STEP 5: डमी TLS/SSL सर्टिफिकेट जनरेट करना ===${NC}"
-# यह आपके सवाल की TLS शर्त को पूरा करने के लिए एक फर्जी की (Key) और सर्टिफिकेट बनाएगा
+echo -e "${BLUE}=== STEP 5: Generating Dummy TLS/SSL Certificate ===${NC}"
+# Generates a self-signed key pair matching the task domain to simulate TLS setup
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout /tmp/tls.key -out /tmp/tls.crt \
   -subj "/CN=gateway.web.k8s.local/O=WebGateway"
@@ -77,7 +78,7 @@ kubectl create secret tls web-tls-secret \
 # ==========================================
 # 6. Create Backend Deployment and Service
 # ==========================================
-echo -e "${BLUE}=== STEP 6: बैकएंड वेब ऐप और सर्विस बनाना ===${NC}"
+echo -e "${BLUE}=== STEP 6: Creating Backend Web Application & Service ===${NC}"
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -114,9 +115,9 @@ spec:
 EOF
 
 # ==========================================
-# 7. Create Existing Ingress Resource (जिससे माइग्रेट करना है)
+# 7. Create Legacy Ingress Resource (Migration Source)
 # ==========================================
-echo -e "${BLUE}=== STEP 7: पुराने 'web' Ingress को नियमों के साथ बनाना ===${NC}"
+echo -e "${BLUE}=== STEP 7: Creating Legacy 'web' Ingress Resource ===${NC}"
 kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -147,7 +148,7 @@ EOF
 # ==========================================
 # 8. Host Entry and External IP Sync
 # ==========================================
-
+echo -e "${BLUE}=== STEP 8: Fetching External IP and Updating /etc/hosts ===${NC}"
 while true; do
   EXTERNAL_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
   if [ -n "$EXTERNAL_IP" ]; then
@@ -156,9 +157,11 @@ while true; do
   sleep 2
 done
 
+# Safely append domain routing mapping into local resolution file if sudo permissions exist
 if command -v sudo >/dev/null 2>&1; then
   echo "$EXTERNAL_IP gateway.web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
 fi
+
 echo "----------------------------------------------------------------"
 echo ""
 echo "--------------------Exam Environment Ready ---------------------"
