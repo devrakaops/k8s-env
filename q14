@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# ANSI Color Codes
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}=== STEP 1: Cleaning up previous practice files ===${NC}"
+rm -f ~/resources.yaml ~/subject.yaml
+
+echo -e "${BLUE}=== STEP 2: Installing cert-manager CRDs ===${NC}"
+# cert-manager का v1.14.0 वर्शन के CRDs इंस्टॉल करना
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.crds.yaml
+
+echo ""
+echo -e "${GREEN}✅ Lab environment is ready!${NC}"
+echo "You can now solve the task using the commands below."
