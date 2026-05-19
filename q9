@@ -1,39 +1,29 @@
 #!/bin/bash
 
-set -e
+# 1. नेमस्पेस बनाना
+kubectl create namespace priority
 
-echo "========================================="
-echo "Creating CKA PriorityClass Practice Lab"
-echo "========================================="
-
-NAMESPACE="priority"
-
-echo "[1/7] Creating namespace..."
-
-kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-
-echo "[2/7] Creating existing PriorityClass..."
-
-cat <<EOF | kubectl apply -f -
-apiVersion: scheduling.k8s.io/v1
-kind: PriorityClass
+# 2. ResourceQuota लागू करना (ताकि केवल 200m CPU ही उपलब्ध हो)
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ResourceQuota
 metadata:
-  name: medium-priority
-value: 100000
-globalDefault: false
-description: "Medium priority workloads"
+  name: low-resource-quota
+  namespace: priority
+spec:
+  hard:
+    requests.cpu: "200m"
 EOF
 
-echo "[3/7] Creating low priority deployment low-app-1..."
-
-cat <<EOF | kubectl apply -f -
+# 3. कम प्राथमिकता वाली पहली डिप्लॉयमेंट (जगह घेरने के लिए - 100m CPU)
+kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: low-app-1
-  namespace: $NAMESPACE
+  name: low-priority-app-1
+  namespace: priority
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: low-app-1
@@ -43,25 +33,22 @@ spec:
         app: low-app-1
     spec:
       containers:
-      - name: stress
-        image: busybox
-        command: ["sh", "-c", "sleep 3600"]
-        resources:
-          requests:
-            memory: "600Mi"
-            cpu: "300m"
+        - name: nginx
+          image: nginx:alpine
+          resources:
+            requests:
+              cpu: "100m"
 EOF
 
-echo "[4/7] Creating low priority deployment low-app-2..."
-
-cat <<EOF | kubectl apply -f -
+# 4. कम प्राथमिकता वाली दूसरी डिप्लॉयमेंट (बची हुई जगह घेरने के लिए - 100m CPU)
+kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: low-app-2
-  namespace: $NAMESPACE
+  name: low-priority-app-2
+  namespace: priority
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: low-app-2
@@ -71,69 +58,40 @@ spec:
         app: low-app-2
     spec:
       containers:
-      - name: stress
-        image: busybox
-        command: ["sh", "-c", "sleep 3600"]
-        resources:
-          requests:
-            memory: "600Mi"
-            cpu: "300m"
+        - name: nginx
+          image: nginx:alpine
+          resources:
+            requests:
+              cpu: "100m"
 EOF
 
-echo "[5/7] Creating app-logger deployment..."
+# थोड़ी देर रुकें ताकि पहले दोनों पॉड्स रनिंग स्टेट में आ जाएं
+sleep 5
 
-cat <<EOF | kubectl apply -f -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-logger
-  namespace: $NAMESPACE
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: app-logger
-  template:
-    metadata:
-      labels:
-        app: app-logger
-    spec:
-      containers:
-      - name: logger
-        image: busybox
-        command: ["sh", "-c", "while true; do echo app-running; sleep 10; done"]
-        resources:
-          requests:
-            memory: "500Mi"
-            cpu: "300m"
-EOF
-
-echo "[6/7] Creating busybox-logger deployment WITHOUT priority class..."
-
-cat <<EOF | kubectl apply -f -
+# 5. मुख्य डिप्लॉयमेंट (busybox-logger) - यह रिसोर्स की कमी (0m CPU बचा है) के कारण Pending रह जाएगी
+kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: busybox-logger
-  namespace: $NAMESPACE
+  namespace: priority
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
-      app: busybox-logger
+      app: logger
   template:
     metadata:
       labels:
-        app: busybox-logger
+        app: logger
     spec:
       containers:
-      - name: busybox
-        image: busybox
-        command: ["sh", "-c", "while true; do echo hello; sleep 5; done"]
-        resources:
-          requests:
-            memory: "900Mi"
-            cpu: "400m"
+        - name: logger
+          image: busybox:stable
+          command: ["sh", "-c", "while true; do echo 'logging'; sleep 1; done"]
+          resources:
+            requests:
+              cpu: "100m" # इसके लिए अब क्लस्टर में जगह नहीं है!
 EOF
 
 sleep 10
