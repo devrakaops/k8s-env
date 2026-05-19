@@ -30,8 +30,12 @@ spec:
   hostPath:
     path: "/mnt/data-mariadb"
 EOF
----
+
+echo -e "${BLUE}=== STEP 4: Creating combined PVC and Deployment manifest ===${NC}"
+# This writes both the complete PVC and the incomplete Deployment into a single file.
+# The candidate only needs to fill in the PVC name under the volumes block.
 cat << 'EOF' > ~/mariadb-deployment.yaml
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -65,10 +69,8 @@ spec:
       volumes:
         - name: mariadb-storage
           persistentVolumeClaim:
-            claimName:  # <--- CANDIDATE NEEDS TO FILL THIS IN WITH: mariadb
+            claimName:  
 EOF
-
-
 
 echo "---------------------------------------------------------------------------"
 echo " "
