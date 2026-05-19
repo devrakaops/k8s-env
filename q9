@@ -1,74 +1,103 @@
 #!/bin/bash
 
-# 1. नेमस्पेस बनाना
+# Color codes for terminal formatting
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+kubectl delete namespace priority --ignore-not-found=true
+kubectl delete priorityclass high-priority --ignore-not-found=true
+sleep 2
+
 kubectl create namespace priority
 
-# 2. ResourceQuota लागू करना (ताकि केवल 200m CPU ही उपलब्ध हो)
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: low-resource-quota
-  namespace: priority
-spec:
-  hard:
-    requests.cpu: "200m"
-EOF
+# These pods will occupy the node resources initially without any explicit priority class
 
-# 3. कम प्राथमिकता वाली पहली डिप्लॉयमेंट (जगह घेरने के लिए - 100m CPU)
+# Deployment 1: Frontend App
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: low-priority-app-1
+  name: low-priority-frontend
   namespace: priority
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: low-app-1
+      app: frontend
   template:
     metadata:
       labels:
-        app: low-app-1
+        app: frontend
     spec:
       containers:
         - name: nginx
           image: nginx:alpine
           resources:
             requests:
-              cpu: "100m"
+              cpu: "250m"
+              memory: "200Mi"
 EOF
 
-# 4. कम प्राथमिकता वाली दूसरी डिप्लॉयमेंट (बची हुई जगह घेरने के लिए - 100m CPU)
+# Deployment 2: Backend App
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: low-priority-app-2
+  name: low-priority-backend
   namespace: priority
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: low-app-2
+      app: backend
   template:
     metadata:
       labels:
-        app: low-app-2
+        app: backend
     spec:
       containers:
         - name: nginx
           image: nginx:alpine
           resources:
             requests:
-              cpu: "100m"
+              cpu: "250m"
+              memory: "200Mi"
 EOF
 
-# थोड़ी देर रुकें ताकि पहले दोनों पॉड्स रनिंग स्टेट में आ जाएं
-sleep 5
+# Deployment 3: Database Proxy App
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: low-priority-db-proxy
+  namespace: priority
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-proxy
+  template:
+    metadata:
+      labels:
+        app: db-proxy
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "200Mi"
+EOF
 
-# 5. मुख्य डिप्लॉयमेंट (busybox-logger) - यह रिसोर्स की कमी (0m CPU बचा है) के कारण Pending रह जाएगी
+sleep 10
+kubectl get pods -n priority
+
+echo "----------------------------------------------------------------"
+echo -e "${BLUE}=== STEP 4: Deploying the high-resource busybox-logger ===${NC}"
+# Increased resource requests to 600m CPU and 450Mi Memory.
+# Without a priorityClassName, this heavy pod will remain trapped in a Pending state.
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -91,12 +120,8 @@ spec:
           command: ["sh", "-c", "while true; do echo 'logging'; sleep 1; done"]
           resources:
             requests:
-              cpu: "100m" # इसके लिए अब क्लस्टर में जगह नहीं है!
+              cpu: "600m"
+              memory: "450Mi"
 EOF
 
-sleep 10
-
-echo ""
-echo "========================================="
-echo "Lab Setup Complete"
-echo "========================================="
+echo -e "${GREEN}=== High-resource lab environment setup complete! ===${NC}"
