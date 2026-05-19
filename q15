@@ -11,19 +11,49 @@ kubectl delete ns nginx-static --ignore-not-found=true
 echo -e "${BLUE}=== STEP 2: Creating Namespace ===${NC}"
 kubectl create namespace nginx-static
 
-echo -e "${BLUE}=== STEP 3: Generating Dummy SSL Certificates ===${NC}"
-# Generates a self-signed certificate pair required for NGINX HTTPS server
+echo -e "${BLUE}=== STEP 3: Installing MetalLB LoadBalancer Provider ===${NC}"
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
+
+echo "⏳ Waiting for MetalLB components to come online..."
+kubectl wait -n metallb-system --for=condition=ready pod --all --timeout=180s
+
+# Dynamically extract internal node IP subnets to build a local L2 pool range
+NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+BASE_IP=$(echo $NODE_IP | awk -F. '{print $1"."$2"."$3}')
+START_IP="${BASE_IP}.220"
+END_IP="${BASE_IP}.230"
+
+echo "Allocating LoadBalancer IP Range: ${START_IP} - ${END_IP}"
+
+cat <<EOF | kubectl apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: nginx-static-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - ${START_IP}-${END_IP}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: nginx-static-l2adv
+  namespace: metallb-system
+spec: {}
+EOF
+
+echo -e "${BLUE}=== STEP 4: Generating SSL Certificates ===${NC}"
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout /tmp/nginx.key -out /tmp/nginx.crt \
   -subj "/CN=web.k8s.local"
 
-# Save the generated certificates securely inside the namespace as a TLS Secret
 kubectl create secret tls nginx-tls-secret \
   -n nginx-static \
   --key=/tmp/nginx.key \
   --cert=/tmp/nginx.crt
 
-echo -e "${BLUE}=== STEP 4: Creating ConfigMap (Initial state allowing TLSv1.2 & TLSv1.3) ===${NC}"
+echo -e "${BLUE}=== STEP 5: Creating ConfigMap (Allowing TLSv1.2 & TLSv1.3) ===${NC}"
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -41,18 +71,17 @@ data:
             ssl_certificate /etc/nginx/ssl/tls.crt;
             ssl_certificate_key /etc/nginx/ssl/tls.key;
             
-            # Initial state allowing multiple protocols (to be modified during exam)
             ssl_protocols TLSv1.2 TLSv1.3;
 
             location / {
-                return 200 'Welcome to NGINX Secure Static Server!';
+                return 200 'Welcome to NGINX Secure Static Server via MetalLB LoadBalancer!\n';
                 add_header Content-Type text/plain;
             }
         }
     }
 EOF
 
-echo -e "${BLUE}=== STEP 5: Creating NGINX Deployment and Service ===${NC}"
+echo -e "${BLUE}=== STEP 6: Creating NGINX Deployment and LoadBalancer Service ===${NC}"
 cat <<EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
@@ -96,24 +125,29 @@ spec:
   ports:
   - port: 443
     targetPort: 443
-    nodePort: 30443
-  type: NodePort
+    protocol: TCP
+  type: LoadBalancer
   selector:
     app: nginx-static
 EOF
 
-echo "⏳ Waiting for NGINX deployment to become ready..."
+echo "⏳ Waiting for NGINX deployment pods to roll out..."
 kubectl rollout status deployment/nginx-static -n nginx-static --timeout=60s
 
-# Map node IP locally to route domain matching rules for testing
-NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+echo "⏳ Fetching assigned External IP from MetalLB..."
+while true; do
+  EXTERNAL_IP=$(kubectl get svc nginx-static-svc -n nginx-static -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  if [ -n "$EXTERNAL_IP" ]; then
+    break
+  fi
+  sleep 2
+done
+
+# Safe domain mapping updates inside your host translation mapping rules
 sudo sed -i '/web.k8s.local/d' /etc/hosts
-echo "$NODE_IP web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
+echo "$EXTERNAL_IP web.k8s.local" | sudo tee -a /etc/hosts >/dev/null
 
 echo ""
-echo -e "${GREEN}✅ Lab Environment Ready!${NC}"
+echo -e "${GREEN}✅ Lab Environment Ready with MetalLB External IP!${NC}"
+echo -e "Assigned IP Address: ${BLUE}$EXTERNAL_IP${NC}"
 echo -e "Initial state verification check: ${BLUE}curl -k https://web.k8s.local${NC}"
-
-echo ""
-echo -e "${GREEN}✅ Lab environment is ready!${NC}"
-echo "You can now solve the task using the commands below."
