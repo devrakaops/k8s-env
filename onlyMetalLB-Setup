@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# ==========================================
+# 1. Install MetalLB
+# ==========================================
+kubectl apply -f \
+https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
+
+echo "⏳ Waiting for MetalLB pods to be ready..."
+
+kubectl wait -n metallb-system \
+  --for=condition=ready pod \
+  --all \
+  --timeout=180s
+
+# ==========================================
+# 2. Configure MetalLB IP Pool & Advertisement
+# ==========================================
+# नोड के इंटरनल सबनेट से डायनामिकली IP रेंज निकालने के लिए
+NODE_IP=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+
+BASE_IP=$(echo $NODE_IP | awk -F. '{print $1"."$2"."$3}')
+
+START_IP="${BASE_IP}.200"
+END_IP="${BASE_IP}.210"
+
+echo "Using IP Range: ${START_IP}-${END_IP}"
+
+cat <<EOF | kubectl apply -f -
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: my-ip-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - ${START_IP}-${END_IP}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: my-l2adv
+  namespace: metallb-system
+spec: {}
+EOF
+
+echo "✅ MetalLB successfully configured!"
